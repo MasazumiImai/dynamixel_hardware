@@ -1,0 +1,93 @@
+/LH/controller_manager:
+  ros__parameters:
+    update_rate: 1000 # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    gripper_controller:
+      type: forward_command_controller/ForwardCommandController
+
+    reboot_controller:
+      type: forward_command_controller/ForwardCommandController
+
+/LH/joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - LH_B2C
+      - LH_C2F
+      - LH_F2T
+      - LH_T2E
+      - LH_steering
+      - LH_driving
+
+    command_interfaces:
+      - velocity
+
+    state_interfaces:
+      - position
+      - velocity
+
+    state_publish_rate: 50.0  # [Hz]
+    action_monitor_rate: 20.0
+
+    allow_partial_joints_goal: false
+    open_loop_control: false  # true: no feedback, false: use feedback
+    allow_integration_in_goal_trajectories: true
+    constraints:
+      stopped_velocity_tolerance: 0.001
+      goal_time: 0.0
+
+    gains:
+      LH_B2C:
+        p: 10.0
+        i: 0.0
+        d: 0.1
+        ff_velocity_scale: 1.0
+      LH_C2F:
+        p: 10.0
+        i: 0.0
+        d: 0.1
+        ff_velocity_scale: 1.0
+      LH_F2T:
+        p: 10.0
+        i: 0.0
+        d: 0.1
+        ff_velocity_scale: 1.0
+      LH_T2E:
+        p: 10.0
+        i: 0.0
+        d: 0.1
+        ff_velocity_scale: 1.0
+      LH_steering:
+        p: 10.0
+        i: 0.0
+        d: 0.1
+        ff_velocity_scale: 1.0
+      LH_driving:
+        p: 10.0
+        i: 0.0
+        d: 0.1
+        ff_velocity_scale: 1.0
+
+/LH/gripper_controller:
+  ros__parameters:
+    joints:
+      - LH_gripper
+    interface_name: velocity
+
+/LH/reboot_controller:
+  ros__parameters:
+    joints:
+      - LH_B2C
+      - LH_C2F
+      - LH_F2T
+      - LH_T2E
+      - LH_steering
+      - LH_driving
+      - LH_gripper
+
+    interface_name: reboot

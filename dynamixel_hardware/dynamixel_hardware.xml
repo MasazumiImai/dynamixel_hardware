@@ -3,7 +3,7 @@
          type="dynamixel_hardware::DynamixelHardware"
          base_class_type="hardware_interface::SystemInterface">
     <description>
-      The ROBOTIS Dynamixel system interface.
+      Dynamixel hardware interface plugin for ros2_control
     </description>
   </class>
 </library>

@@ -39,14 +39,11 @@ constexpr const char * kPresentSpeedItem = "Present_Speed";
 constexpr const char * kPresentCurrentItem = "Present_Current";
 constexpr const char * kPresentLoadItem = "Present_Load";
 constexpr const char * const kExtraJointParameters[] = {
-  "Profile_Velocity",
-  "Profile_Acceleration",
-  "Position_P_Gain",
-  "Position_I_Gain",
-  "Position_D_Gain",
-  "Velocity_P_Gain",
-  "Velocity_I_Gain",
+  "Profile_Velocity", "Profile_Acceleration", "Position_P_Gain", "Position_I_Gain",
+  "Position_D_Gain", "Velocity_P_Gain", "Velocity_I_Gain",
 };
+// Reboot detection threshold. 1.0 is sent for reboot, so 0.5 is used.
+constexpr double kRebootThreshold = 0.5;
 
 CallbackReturn DynamixelHardware::on_init(const hardware_interface::HardwareInfo & info)
 {
@@ -54,6 +51,8 @@ CallbackReturn DynamixelHardware::on_init(const hardware_interface::HardwareInfo
   if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
     return CallbackReturn::ERROR;
   }
+
+  clock_ = std::make_shared<rclcpp::Clock>(RCL_SYSTEM_TIME);
 
   joints_.resize(info_.joints.size(), Joint());
   joint_ids_.resize(info_.joints.size(), 0);
@@ -102,7 +101,7 @@ CallbackReturn DynamixelHardware::on_init(const hardware_interface::HardwareInfo
   }
 
   enable_torque(false);
-  set_control_mode(ControlMode::Position, true);
+  set_control_mode(ControlMode::Velocity, true);
   set_joint_params();
   enable_torque(true);
 
@@ -210,6 +209,10 @@ std::vector<hardware_interface::CommandInterface> DynamixelHardware::export_comm
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
         info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &joints_[i].command.velocity));
+
+    command_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        info_.joints[i].name, "reboot", &joints_[i].command.reboot));
   }
 
   return command_interfaces;
@@ -240,8 +243,7 @@ CallbackReturn DynamixelHardware::on_deactivate(
 }
 
 return_type DynamixelHardware::read(
-  const rclcpp::Time & /* time */,
-  const rclcpp::Duration & /* period */)
+  const rclcpp::Time & /* time */, const rclcpp::Duration & /* period */)
 {
   if (use_dummy_) {
     return return_type::OK;
@@ -258,15 +260,21 @@ return_type DynamixelHardware::read(
   if (!dynamixel_workbench_.syncRead(
       kPresentPositionVelocityCurrentIndex, ids.data(), ids.size(), &log))
   {
-    RCLCPP_ERROR(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+    RCLCPP_DEBUG_THROTTLE(
+      rclcpp::get_logger(kDynamixelHardware), *clock_, 1000, "SyncRead failed! Log: %s", log);
+    return return_type::OK;
   }
+
+  bool get_data_success = true;
 
   if (!dynamixel_workbench_.getSyncReadData(
       kPresentPositionVelocityCurrentIndex, ids.data(), ids.size(),
       control_items_[kPresentCurrentItem]->address,
       control_items_[kPresentCurrentItem]->data_length, currents.data(), &log))
   {
-    RCLCPP_ERROR(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+    RCLCPP_DEBUG_THROTTLE(
+      rclcpp::get_logger(kDynamixelHardware), *clock_, 1000, "Get Current Data failed: %s", log);
+    get_data_success = false;
   }
 
   if (!dynamixel_workbench_.getSyncReadData(
@@ -274,7 +282,9 @@ return_type DynamixelHardware::read(
       control_items_[kPresentVelocityItem]->address,
       control_items_[kPresentVelocityItem]->data_length, velocities.data(), &log))
   {
-    RCLCPP_ERROR(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+    RCLCPP_DEBUG_THROTTLE(
+      rclcpp::get_logger(kDynamixelHardware), *clock_, 1000, "Get Velocity Data failed: %s", log);
+    get_data_success = false;
   }
 
   if (!dynamixel_workbench_.getSyncReadData(
@@ -282,27 +292,112 @@ return_type DynamixelHardware::read(
       control_items_[kPresentPositionItem]->address,
       control_items_[kPresentPositionItem]->data_length, positions.data(), &log))
   {
-    RCLCPP_ERROR(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+    RCLCPP_DEBUG_THROTTLE(
+      rclcpp::get_logger(kDynamixelHardware), *clock_, 1000, "Get Position Data failed: %s", log);
+    get_data_success = false;
   }
 
-  for (uint i = 0; i < ids.size(); i++) {
-    joints_[i].state.position = dynamixel_workbench_.convertValue2Radian(ids[i], positions[i]);
-    joints_[i].state.velocity = dynamixel_workbench_.convertValue2Velocity(ids[i], velocities[i]);
-    joints_[i].state.effort = dynamixel_workbench_.convertValue2Current(currents[i]);
+  if (get_data_success) {
+    for (uint i = 0; i < ids.size(); i++) {
+      joints_[i].state.position = dynamixel_workbench_.convertValue2Radian(ids[i], positions[i]);
+      joints_[i].state.velocity = dynamixel_workbench_.convertValue2Velocity(ids[i], velocities[i]);
+      joints_[i].state.effort = dynamixel_workbench_.convertValue2Current(currents[i]);
+    }
   }
 
   return return_type::OK;
 }
 
 return_type DynamixelHardware::write(
-  const rclcpp::Time & /* time */,
-  const rclcpp::Duration & /* period */)
+  const rclcpp::Time & /* time */, const rclcpp::Duration & /* period */)
 {
   if (use_dummy_) {
     for (auto & joint : joints_) {
       joint.prev_command.position = joint.command.position;
       joint.state.position = joint.command.position;
     }
+    return return_type::OK;
+  }
+
+  // Reboot control
+  bool is_reboot_executed_in_this_cycle = false;
+
+  for (uint i = 0; i < joints_.size(); ++i) {
+    if (joints_[i].command.reboot > kRebootThreshold) {
+      if (!joints_[i].reboot_triggered) {
+        const char * log = nullptr;
+        uint8_t id = joint_ids_[i];
+
+        RCLCPP_WARN(
+          rclcpp::get_logger(kDynamixelHardware), "Attempting to reboot Joint ID: %d", id);
+
+        // Reboot execution
+        bool reboot_result = dynamixel_workbench_.reboot(id, &log);
+        if (!reboot_result) {
+          RCLCPP_WARN(rclcpp::get_logger(kDynamixelHardware), "Reboot returned false: %s", log);
+        }
+
+        rclcpp::sleep_for(std::chrono::milliseconds(500));  // Waiting for Dynamixel to reboot
+
+        // Turn on torque
+        log = nullptr;
+        if (!dynamixel_workbench_.torqueOn(id, &log)) {
+          RCLCPP_ERROR(
+            rclcpp::get_logger(kDynamixelHardware), "Failed to enable torque for ID %d: %s", id,
+            log);
+        } else {
+          rclcpp::sleep_for(std::chrono::milliseconds(10));
+
+          // Rereading current position
+          uint8_t single_id_arr[1] = {id};
+          if (dynamixel_workbench_.syncRead(
+              kPresentPositionVelocityCurrentIndex, single_id_arr, 1, &log))
+          {
+            int32_t present_pos_value = 0;
+            if (dynamixel_workbench_.getSyncReadData(
+                kPresentPositionVelocityCurrentIndex, single_id_arr, 1,
+                control_items_[kPresentPositionItem]->address,
+                control_items_[kPresentPositionItem]->data_length, &present_pos_value, &log))
+            {
+              double current_real_position =
+                dynamixel_workbench_.convertValue2Radian(id, present_pos_value);
+
+              // Update state
+              joints_[i].state.position = current_real_position;
+              joints_[i].command.position = current_real_position;
+              joints_[i].command.velocity = 0.0;
+              joints_[i].prev_command.position = current_real_position;
+              joints_[i].prev_command.velocity = 0.0;
+
+              RCLCPP_INFO(
+                rclcpp::get_logger(kDynamixelHardware),
+                "Joint ID %d successfully recovered. Position reset to: %f", id,
+                current_real_position);
+            } else {
+              RCLCPP_ERROR(
+                rclcpp::get_logger(kDynamixelHardware),
+                "Failed to get sync read data for ID %d: %s", id, log);
+            }
+          } else {
+            RCLCPP_ERROR(
+              rclcpp::get_logger(kDynamixelHardware), "Failed to sync read position for ID %d: %s",
+              id, log);
+          }
+        }
+        joints_[i].reboot_triggered = true;
+
+        is_reboot_executed_in_this_cycle = true;
+      }
+    } else {
+      joints_[i].reboot_triggered = false;
+    }
+  }
+
+  // Return handling during reboot active
+  if (is_reboot_executed_in_this_cycle) {
+    // HACK: To prevent port errors caused by high-speed loops,
+    // wait for approximately the normal control cycle (10 ms) before returning.
+    rclcpp::sleep_for(std::chrono::milliseconds(10));
     return return_type::OK;
   }
 
@@ -363,9 +458,14 @@ return_type DynamixelHardware::write(
 return_type DynamixelHardware::enable_torque(const bool enabled)
 {
   const char * log = nullptr;
+  const uint8_t end_effector_id_remainder = 5;  // Set only the end effector joints to passive
 
   if (enabled && !torque_enabled_) {
     for (uint i = 0; i < info_.joints.size(); ++i) {
+      uint8_t id = joint_ids_[i];
+      if (id % 10 == end_effector_id_remainder) {
+        continue;
+      }
       if (!dynamixel_workbench_.torqueOn(joint_ids_[i], &log)) {
         RCLCPP_FATAL(rclcpp::get_logger(kDynamixelHardware), "%s", log);
         return return_type::ERROR;
@@ -515,8 +615,7 @@ CallbackReturn DynamixelHardware::set_joint_params()
           return CallbackReturn::ERROR;
         }
         RCLCPP_INFO(
-          rclcpp::get_logger(
-            kDynamixelHardware), "%s set to %d for joint %d", paramName, value, i);
+          rclcpp::get_logger(kDynamixelHardware), "%s set to %d for joint %d", paramName, value, i);
       }
     }
   }

@@ -18,12 +18,11 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclcpp_lifecycle REQUIRED)
-find_package(lifecycle_msgs REQUIRED)
-find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(hardware_interface REQUIRED)
 find_package(dynamixel_workbench_toolbox REQUIRED)
-
+# find_package(rclcpp_lifecycle REQUIRED)
+include_directories(include)
 add_library(
   ${PROJECT_NAME}
   SHARED
@@ -37,16 +36,14 @@ target_include_directories(
 ament_target_dependencies(
   ${PROJECT_NAME}
   rclcpp
-  rclcpp_lifecycle
-  lifecycle_msgs
   hardware_interface
   pluginlib
   dynamixel_workbench_toolbox
 )
 
-
 pluginlib_export_plugin_description_file(hardware_interface dynamixel_hardware.xml)
 
+# INSTALL
 install(
   TARGETS ${PROJECT_NAME}
   DESTINATION lib
@@ -54,6 +51,14 @@ install(
 install(
   DIRECTORY include/
   DESTINATION include
+)
+
+install(
+  DIRECTORY
+    launch
+    config
+  DESTINATION
+    share/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)
@@ -67,6 +72,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+## EXPORTS
 ament_export_include_directories(
   include
 )
@@ -81,3 +87,4 @@ ament_export_dependencies(
 )
 
 ament_package()
+

@@ -20,13 +20,14 @@
 #include <map>
 #include <vector>
 
+#include "dynamixel_hardware/visibility_control.h"
+
+#include "rclcpp/macros.hpp"
 #include <hardware_interface/handle.hpp>
 #include <hardware_interface/hardware_info.hpp>
 #include <hardware_interface/system_interface.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/state.hpp>
-
-#include "dynamixel_hardware/visiblity_control.h"
-#include "rclcpp/macros.hpp"
 
 using hardware_interface::CallbackReturn;
 using hardware_interface::return_type;
@@ -38,6 +39,7 @@ struct JointValue
   double position{0.0};
   double velocity{0.0};
   double effort{0.0};
+  double reboot{0.0};
 };
 
 struct Joint
@@ -45,6 +47,7 @@ struct Joint
   JointValue state{};
   JointValue command{};
   JointValue prev_command{};
+  bool reboot_triggered{false};
 };
 
 enum class ControlMode
@@ -52,7 +55,7 @@ enum class ControlMode
   Position,
   Velocity,
   Torque,
-  Currrent,
+  Current,
   ExtendedPosition,
   MultiTurn,
   CurrentBasedPosition,
@@ -104,6 +107,8 @@ private:
   ControlMode control_mode_{ControlMode::Position};
   bool mode_changed_{false};
   bool use_dummy_{false};
+
+  rclcpp::Clock::SharedPtr clock_;
 };
 }  // namespace dynamixel_hardware
 

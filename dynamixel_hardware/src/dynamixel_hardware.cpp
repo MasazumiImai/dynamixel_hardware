@@ -57,6 +57,14 @@ CallbackReturn DynamixelHardware::on_init(const hardware_interface::HardwareInfo
   joints_.resize(info_.joints.size(), Joint());
   joint_ids_.resize(info_.joints.size(), 0);
 
+  for (auto & joint : joints_) {
+    joint.state.position = 0.0;
+    joint.state.velocity = 0.0;
+    joint.state.effort = 0.0;
+    joint.command.velocity = 0.0;
+    joint.prev_command.velocity = 0.0;
+  }
+
   for (uint i = 0; i < info_.joints.size(); i++) {
     joint_ids_[i] = std::stoi(info_.joints[i].parameters.at("id"));
     joints_[i].state.position = std::numeric_limits<double>::quiet_NaN();
@@ -220,12 +228,30 @@ std::vector<hardware_interface::CommandInterface> DynamixelHardware::export_comm
 
 CallbackReturn DynamixelHardware::on_activate(const rclcpp_lifecycle::State & /* previous_state */)
 {
+  const char * log = nullptr;
+
+  for (auto & joint : joints_) {
+    joint.command.velocity = 0.0;
+    joint.prev_command.velocity = 0.0;
+  }
+
   RCLCPP_DEBUG(rclcpp::get_logger(kDynamixelHardware), "start");
   for (uint i = 0; i < joints_.size(); i++) {
     if (use_dummy_ && std::isnan(joints_[i].state.position)) {
       joints_[i].state.position = 0.0;
       joints_[i].state.velocity = 0.0;
       joints_[i].state.effort = 0.0;
+    }
+
+    if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Goal_Velocity", 0, &log)) {
+      RCLCPP_FATAL(
+        rclcpp::get_logger(kDynamixelHardware), "Failed to reset Goal_Velocity: %s", log);
+      return CallbackReturn::ERROR;
+    }
+
+    if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Torque_Enable", 1, &log)) {
+      RCLCPP_FATAL(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+      return CallbackReturn::ERROR;
     }
   }
   read(rclcpp::Time{}, rclcpp::Duration(0, 0));
@@ -592,8 +618,13 @@ CallbackReturn DynamixelHardware::set_joint_velocities()
   std::copy(joint_ids_.begin(), joint_ids_.end(), ids.begin());
   for (uint i = 0; i < ids.size(); i++) {
     joints_[i].prev_command.velocity = joints_[i].command.velocity;
-    commands[i] = dynamixel_workbench_.convertVelocity2Value(
-      ids[i], static_cast<float>(joints_[i].command.velocity));
+
+    double cmd_vel = joints_[i].command.velocity;
+    if (std::isnan(cmd_vel)) {
+      cmd_vel = 0.0;
+    }
+
+    commands[i] = dynamixel_workbench_.convertVelocity2Value(ids[i], static_cast<float>(cmd_vel));
   }
   if (!dynamixel_workbench_.syncWrite(
       kGoalVelocityIndex, ids.data(), ids.size(), commands.data(), 1, &log))

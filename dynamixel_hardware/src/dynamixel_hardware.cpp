@@ -229,6 +229,7 @@ std::vector<hardware_interface::CommandInterface> DynamixelHardware::export_comm
 CallbackReturn DynamixelHardware::on_activate(const rclcpp_lifecycle::State & /* previous_state */)
 {
   const char * log = nullptr;
+  const uint8_t passive_joint_id = 5;
 
   for (auto & joint : joints_) {
     joint.command.velocity = 0.0;
@@ -241,6 +242,13 @@ CallbackReturn DynamixelHardware::on_activate(const rclcpp_lifecycle::State & /*
       joints_[i].state.position = 0.0;
       joints_[i].state.velocity = 0.0;
       joints_[i].state.effort = 0.0;
+    }
+
+    uint8_t id = joint_ids_[i];
+    if (id % 10 == passive_joint_id) {
+      RCLCPP_DEBUG(
+        rclcpp::get_logger(kDynamixelHardware), "Skipping torque ON for passive joint ID: %d", id);
+      continue;
     }
 
     if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Goal_Velocity", 0, &log)) {
@@ -484,12 +492,15 @@ return_type DynamixelHardware::write(
 return_type DynamixelHardware::enable_torque(const bool enabled)
 {
   const char * log = nullptr;
-  const uint8_t end_effector_id_remainder = 5;  // Set only the end effector joints to passive
+  const uint8_t passive_joint_id = 5;
 
   if (enabled && !torque_enabled_) {
     for (uint i = 0; i < info_.joints.size(); ++i) {
       uint8_t id = joint_ids_[i];
-      if (id % 10 == end_effector_id_remainder) {
+      if (id % 10 == passive_joint_id) {
+        RCLCPP_DEBUG(
+          rclcpp::get_logger(kDynamixelHardware), "Skipping torque ON for passive joint ID: %d",
+          id);
         continue;
       }
       if (!dynamixel_workbench_.torqueOn(joint_ids_[i], &log)) {
@@ -501,6 +512,13 @@ return_type DynamixelHardware::enable_torque(const bool enabled)
     RCLCPP_INFO(rclcpp::get_logger(kDynamixelHardware), "Torque enabled");
   } else if (!enabled && torque_enabled_) {
     for (uint i = 0; i < info_.joints.size(); ++i) {
+      uint8_t id = joint_ids_[i];
+      if (id % 10 == passive_joint_id) {
+        RCLCPP_DEBUG(
+          rclcpp::get_logger(kDynamixelHardware), "Skipping torque ON for passive joint ID: %d",
+          id);
+        continue;
+      }
       if (!dynamixel_workbench_.torqueOff(joint_ids_[i], &log)) {
         RCLCPP_FATAL(rclcpp::get_logger(kDynamixelHardware), "%s", log);
         return return_type::ERROR;

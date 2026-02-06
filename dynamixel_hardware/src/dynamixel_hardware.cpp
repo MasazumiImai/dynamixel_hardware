@@ -228,7 +228,7 @@ std::vector<hardware_interface::CommandInterface> DynamixelHardware::export_comm
 
 CallbackReturn DynamixelHardware::on_activate(const rclcpp_lifecycle::State & /* previous_state */)
 {
-  const char * log = nullptr;
+  // const char * log = nullptr;
   const uint8_t passive_joint_id = 5;
 
   for (auto & joint : joints_) {
@@ -251,16 +251,16 @@ CallbackReturn DynamixelHardware::on_activate(const rclcpp_lifecycle::State & /*
       continue;
     }
 
-    if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Goal_Velocity", 0, &log)) {
-      RCLCPP_FATAL(
-        rclcpp::get_logger(kDynamixelHardware), "Failed to reset Goal_Velocity: %s", log);
-      return CallbackReturn::ERROR;
-    }
+    // if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Goal_Velocity", 0, &log)) {
+    //   RCLCPP_FATAL(
+    //     rclcpp::get_logger(kDynamixelHardware), "Failed to reset Goal_Velocity: %s", log);
+    //   return CallbackReturn::ERROR;
+    // }
 
-    if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Torque_Enable", 1, &log)) {
-      RCLCPP_FATAL(rclcpp::get_logger(kDynamixelHardware), "%s", log);
-      return CallbackReturn::ERROR;
-    }
+    // if (!dynamixel_workbench_.itemWrite(joint_ids_[i], "Torque_Enable", 1, &log)) {
+    //   RCLCPP_FATAL(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+    //   return CallbackReturn::ERROR;
+    // }
   }
   read(rclcpp::Time{}, rclcpp::Duration(0, 0));
   reset_command();

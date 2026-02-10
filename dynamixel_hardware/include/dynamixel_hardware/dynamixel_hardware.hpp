@@ -109,6 +109,8 @@ private:
   bool use_dummy_{false};
 
   rclcpp::Clock::SharedPtr clock_;
+
+  std::vector<double> joint_position_offsets_;  // for reboot
 };
 }  // namespace dynamixel_hardware
 

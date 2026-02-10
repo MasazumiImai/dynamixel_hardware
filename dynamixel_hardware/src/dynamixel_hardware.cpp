@@ -57,6 +57,8 @@ CallbackReturn DynamixelHardware::on_init(const hardware_interface::HardwareInfo
   joints_.resize(info_.joints.size(), Joint());
   joint_ids_.resize(info_.joints.size(), 0);
 
+  joint_position_offsets_.resize(info_.joints.size(), 0.0);
+
   for (auto & joint : joints_) {
     joint.state.position = 0.0;
     joint.state.velocity = 0.0;
@@ -333,7 +335,8 @@ return_type DynamixelHardware::read(
 
   if (get_data_success) {
     for (uint i = 0; i < ids.size(); i++) {
-      joints_[i].state.position = dynamixel_workbench_.convertValue2Radian(ids[i], positions[i]);
+      double raw_position = dynamixel_workbench_.convertValue2Radian(ids[i], positions[i]);
+      joints_[i].state.position = raw_position + joint_position_offsets_[i];
       joints_[i].state.velocity = dynamixel_workbench_.convertValue2Velocity(ids[i], velocities[i]);
       joints_[i].state.effort = dynamixel_workbench_.convertValue2Current(currents[i]);
     }
@@ -363,12 +366,16 @@ return_type DynamixelHardware::write(
         uint8_t id = joint_ids_[i];
 
         RCLCPP_WARN(
-          rclcpp::get_logger(kDynamixelHardware), "Attempting to reboot Joint ID: %d", id);
+          rclcpp::get_logger(kDynamixelHardware), "Rebooting Joint ID: %d", id);
+
+        double last_known_position = joints_[i].state.position;
 
         // Reboot execution
         bool reboot_result = dynamixel_workbench_.reboot(id, &log);
         if (!reboot_result) {
-          RCLCPP_WARN(rclcpp::get_logger(kDynamixelHardware), "Reboot returned false: %s", log);
+          RCLCPP_WARN(rclcpp::get_logger(kDynamixelHardware),
+            "Reboot command returned false (likely due to current error status): %s. Proceeding...",
+            log);
         }
 
         rclcpp::sleep_for(std::chrono::milliseconds(500));  // Waiting for Dynamixel to reboot
@@ -377,8 +384,8 @@ return_type DynamixelHardware::write(
         log = nullptr;
         if (!dynamixel_workbench_.torqueOn(id, &log)) {
           RCLCPP_ERROR(
-            rclcpp::get_logger(kDynamixelHardware), "Failed to enable torque for ID %d: %s", id,
-            log);
+            rclcpp::get_logger(kDynamixelHardware), "Failed to enable torque for Joint ID %d: %s",
+            id, log);
         } else {
           rclcpp::sleep_for(std::chrono::milliseconds(10));
 
@@ -393,20 +400,29 @@ return_type DynamixelHardware::write(
                 control_items_[kPresentPositionItem]->address,
                 control_items_[kPresentPositionItem]->data_length, &present_pos_value, &log))
             {
-              double current_real_position =
+              double current_raw_position =
                 dynamixel_workbench_.convertValue2Radian(id, present_pos_value);
 
-              // Update state
-              joints_[i].state.position = current_real_position;
-              joints_[i].command.position = current_real_position;
-              joints_[i].command.velocity = 0.0;
-              joints_[i].prev_command.position = current_real_position;
-              joints_[i].prev_command.velocity = 0.0;
+              // === Offset Calculation in Software (No Hardware Writing) ===
+
+              double diff = current_raw_position - last_known_position;
+
+              // Calculate the missing number of rotations (a multiple of 2pi)
+              double lost_turns_rad = 2.0 * M_PI * std::round(diff / (2.0 * M_PI));
+
+              //  raw + offset = last_known (about)
+              //  offset = last_known - raw
+              double turn_offset = -1.0 * lost_turns_rad;
+              joint_position_offsets_[i] = turn_offset;
+
+              double restored_position = current_raw_position + joint_position_offsets_[i];
+              joints_[i].state.position = restored_position;
+              joints_[i].command.position = restored_position;
 
               RCLCPP_INFO(
                 rclcpp::get_logger(kDynamixelHardware),
-                "Joint ID %d successfully recovered. Position reset to: %f", id,
-                current_real_position);
+                "Recovered Joint ID %d. Raw: %.2f, Offset: %.2f, Restored: %.2f",
+                id, current_raw_position, joint_position_offsets_[i], restored_position);
             } else {
               RCLCPP_ERROR(
                 rclcpp::get_logger(kDynamixelHardware),
@@ -414,8 +430,8 @@ return_type DynamixelHardware::write(
             }
           } else {
             RCLCPP_ERROR(
-              rclcpp::get_logger(kDynamixelHardware), "Failed to sync read position for ID %d: %s",
-              id, log);
+              rclcpp::get_logger(kDynamixelHardware),
+              "Failed to sync read position for Joint ID %d: %s", id, log);
           }
         }
         joints_[i].reboot_triggered = true;
@@ -459,7 +475,20 @@ return_type DynamixelHardware::write(
     if (mode_changed_) {
       set_joint_params();
     }
-    set_joint_positions();
+    // set_joint_positions();
+    const char * log = nullptr;
+    std::vector<int32_t> commands(info_.joints.size(), 0);
+    for (size_t k=0; k<joint_ids_.size(); ++k) {
+      // motor command value = ROS command value - offset
+      double hw_command_rad = joints_[k].command.position - joint_position_offsets_[k];
+      commands[k] = dynamixel_workbench_.convertRadian2Value(joint_ids_[k], hw_command_rad);
+    }
+    if (!dynamixel_workbench_.syncWrite(kGoalPositionIndex, joint_ids_.data(),
+        static_cast<uint8_t>(joint_ids_.size()), commands.data(), 1, &log))
+    {
+      RCLCPP_ERROR(
+        rclcpp::get_logger(kDynamixelHardware), "SyncWrite failed: %s", log);
+    }
     return return_type::OK;
   }
 

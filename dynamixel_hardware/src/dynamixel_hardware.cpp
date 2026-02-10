@@ -381,7 +381,6 @@ return_type DynamixelHardware::write(
         rclcpp::sleep_for(std::chrono::milliseconds(500));  // Waiting for Dynamixel to reboot
 
         // Turn on torque
-        log = nullptr;
         if (!dynamixel_workbench_.torqueOn(id, &log)) {
           RCLCPP_ERROR(
             rclcpp::get_logger(kDynamixelHardware), "Failed to enable torque for Joint ID %d: %s",

@@ -40,6 +40,7 @@ struct JointValue
   double velocity{0.0};
   double effort{0.0};
   double reboot{0.0};
+  double hardware_error_status{0.0};
 };
 
 struct Joint

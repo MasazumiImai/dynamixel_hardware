@@ -38,6 +38,8 @@ constexpr const char * kPresentVelocityItem = "Present_Velocity";
 constexpr const char * kPresentSpeedItem = "Present_Speed";
 constexpr const char * kPresentCurrentItem = "Present_Current";
 constexpr const char * kPresentLoadItem = "Present_Load";
+constexpr const char * kHardwareErrorStatusItem = "Hardware_Error_Status";
+constexpr uint8_t kHardwareErrorStatusIndex = 1;
 constexpr const char * const kExtraJointParameters[] = {
   "Profile_Velocity", "Profile_Acceleration", "Position_P_Gain", "Position_I_Gain",
   "Position_D_Gain", "Velocity_P_Gain", "Velocity_I_Gain",
@@ -186,6 +188,22 @@ CallbackReturn DynamixelHardware::on_init(const hardware_interface::HardwareInfo
     return CallbackReturn::ERROR;
   }
 
+  const ControlItem * hw_error_status =
+    dynamixel_workbench_.getItemInfo(joint_ids_[0], kHardwareErrorStatusItem);
+  if (hw_error_status == nullptr) {
+    RCLCPP_FATAL(
+      rclcpp::get_logger(kDynamixelHardware), "Could not get Hardware_Error_Status item info");
+    return CallbackReturn::ERROR;
+  }
+  control_items_[kHardwareErrorStatusItem] = hw_error_status;
+
+  if (!dynamixel_workbench_.addSyncReadHandler(
+      hw_error_status->address, hw_error_status->data_length, &log))
+  {
+    RCLCPP_FATAL(rclcpp::get_logger(kDynamixelHardware), "%s", log);
+    return CallbackReturn::ERROR;
+  }
+
   return CallbackReturn::SUCCESS;
 }
 
@@ -203,6 +221,9 @@ std::vector<hardware_interface::StateInterface> DynamixelHardware::export_state_
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &joints_[i].state.effort));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "hardware_error_status", &joints_[i].state.hardware_error_status));
   }
 
   return state_interfaces;
@@ -339,6 +360,50 @@ return_type DynamixelHardware::read(
       joints_[i].state.position = raw_position + joint_position_offsets_[i];
       joints_[i].state.velocity = dynamixel_workbench_.convertValue2Velocity(ids[i], velocities[i]);
       joints_[i].state.effort = dynamixel_workbench_.convertValue2Current(currents[i]);
+    }
+  }
+
+  // Hardware Error Status
+  std::vector<int32_t> hw_error_statuses(info_.joints.size(), 0);
+  if (!dynamixel_workbench_.syncRead(kHardwareErrorStatusIndex, ids.data(), ids.size(), &log)) {
+    RCLCPP_DEBUG_THROTTLE(
+      rclcpp::get_logger(kDynamixelHardware), *clock_, 1000,
+      "SyncRead HW Error Status failed: %s", log);
+  } else {
+    if (dynamixel_workbench_.getSyncReadData(
+        kHardwareErrorStatusIndex, ids.data(), ids.size(),
+        control_items_[kHardwareErrorStatusItem]->address,
+        control_items_[kHardwareErrorStatusItem]->data_length,
+        hw_error_statuses.data(), &log))
+    {
+      for (uint i = 0; i < ids.size(); ++i) {
+        joints_[i].state.hardware_error_status = static_cast<double>(hw_error_statuses[i]);
+      }
+    } else {
+      RCLCPP_DEBUG_THROTTLE(
+        rclcpp::get_logger(kDynamixelHardware), *clock_, 1000,
+        "Get HW Error Status Data failed: %s", log);
+    }
+  }
+
+  for (uint i = 0; i < ids.size(); ++i) {
+    int32_t error_code = hw_error_statuses[i];
+
+    if (error_code != 0) {
+      bool is_overload = (error_code & 0x20);
+
+      if (is_overload) {
+        std::string err_msg = "\033[31m OVERLOAD Error (Torque limit) on joint " +
+          std::to_string(i) + " (ID: " + std::to_string(ids[i]) +
+          ")! Error code: " + std::to_string(error_code) + "\033[0m";
+
+        RCLCPP_ERROR_THROTTLE(
+          rclcpp::get_logger(kDynamixelHardware), *clock_, 1000, "%s", err_msg.c_str());
+      } else {
+        RCLCPP_ERROR_THROTTLE(
+          rclcpp::get_logger(kDynamixelHardware), *clock_, 1000,
+          "Hardware Error on joint %d (ID: %d): 0x%02X", i, ids[i], hw_error_statuses[i]);
+      }
     }
   }
 

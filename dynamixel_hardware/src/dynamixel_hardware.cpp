@@ -376,7 +376,7 @@ return_type DynamixelHardware::read(
         control_items_[kHardwareErrorStatusItem]->data_length,
         hw_error_statuses.data(), &log))
     {
-      for (uint i = 0; i < ids.size(); i++) {
+      for (uint i = 0; i < ids.size(); ++i) {
         joints_[i].state.hardware_error_status = static_cast<double>(hw_error_statuses[i]);
       }
     } else {
@@ -386,11 +386,24 @@ return_type DynamixelHardware::read(
     }
   }
 
-  for (uint i = 0; i < ids.size(); i++) {
-    if (hw_error_statuses[i] != 0) {
-      RCLCPP_ERROR_THROTTLE(
-        rclcpp::get_logger(kDynamixelHardware), *clock_, 1000,
-        "Hardware Error on joint %d (ID: %d): 0x%02X", i, ids[i], hw_error_statuses[i]);
+  for (uint i = 0; i < ids.size(); ++i) {
+    int32_t error_code = hw_error_statuses[i];
+
+    if (error_code != 0) {
+      bool is_overload = (error_code & 0x20);
+
+      if (is_overload) {
+        std::string err_msg = "\033[31m OVERLOAD Error (Torque limit) on joint " +
+          std::to_string(i) + " (ID: " + std::to_string(ids[i]) +
+          ")! Error code: " + std::to_string(error_code) + "\033[0m";
+
+        RCLCPP_ERROR_THROTTLE(
+          rclcpp::get_logger(kDynamixelHardware), *clock_, 1000, "%s", err_msg.c_str());
+      } else {
+        RCLCPP_ERROR_THROTTLE(
+          rclcpp::get_logger(kDynamixelHardware), *clock_, 1000,
+          "Hardware Error on joint %d (ID: %d): 0x%02X", i, ids[i], hw_error_statuses[i]);
+      }
     }
   }
 

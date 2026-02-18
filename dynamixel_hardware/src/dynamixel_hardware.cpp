@@ -393,7 +393,7 @@ return_type DynamixelHardware::read(
       bool is_overload = (error_code & 0x20);
 
       if (is_overload) {
-        std::string err_msg = "\033[31m OVERLOAD Error (Torque limit) on joint " +
+        std::string err_msg = "\033[31m OVERLOAD ERROR (Torque limit) on joint " +
           std::to_string(i) + " (ID: " + std::to_string(ids[i]) +
           ")! Error code: " + std::to_string(error_code) + "\033[0m";
 
@@ -469,23 +469,18 @@ return_type DynamixelHardware::write(
 
               // === Offset Calculation in Software (No Hardware Writing) ===
 
-              double diff = current_raw_position - last_known_position;
-
-              // Calculate the missing number of rotations (a multiple of 2pi)
-              double lost_turns_rad = 2.0 * M_PI * std::round(diff / (2.0 * M_PI));
-
-              //  raw + offset = last_known (about)
-              //  offset = last_known - raw
-              double turn_offset = -1.0 * lost_turns_rad;
-              joint_position_offsets_[i] = turn_offset;
+              joint_position_offsets_[i] = last_known_position - current_raw_position;
 
               double restored_position = current_raw_position + joint_position_offsets_[i];
               joints_[i].state.position = restored_position;
               joints_[i].command.position = restored_position;
 
+              joints_[i].command.velocity = 0.0;
+              joints_[i].prev_command.velocity = 0.0;
+
               RCLCPP_INFO(
                 rclcpp::get_logger(kDynamixelHardware),
-                "Recovered Joint ID %d. Raw: %.2f, Offset: %.2f, Restored: %.2f",
+                "\033[32m Recovered Joint ID %d. Raw: %.2f, Offset: %.2f, Restored: %.2f \033[0m",
                 id, current_raw_position, joint_position_offsets_[i], restored_position);
             } else {
               RCLCPP_ERROR(
